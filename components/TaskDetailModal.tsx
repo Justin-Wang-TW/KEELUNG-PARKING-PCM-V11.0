@@ -2,8 +2,9 @@
 import React, { useState, useEffect } from 'react';
 import { Task, User, TaskStatus, AuditLog, ReviewDecision } from '../types';
 import { STATUS_COLORS, STATIONS } from '../constants';
+import AttachmentList from './AttachmentList';
 import { api } from '../api';
-import { getDisplayStatus, selectableStatuses, defaultSelectedStatus, isReviewer, isDefect, formatDate, formatDateTime, daysUntil, taskAttachments, attachmentLabel, canDeleteAttachment, hasUnnamedAttachments } from '../taskStatus';
+import { getDisplayStatus, selectableStatuses, defaultSelectedStatus, isReviewer, isDefect, formatDate, formatDateTime, daysUntil, taskAttachments, hasUnnamedAttachments } from '../taskStatus';
 import { 
   X, FileText, Download, User as UserIcon, Calendar, 
   MapPin, Paperclip, Clock, Send, Loader2, CheckCircle2, History,
@@ -24,27 +25,22 @@ interface TaskDetailModalProps {
     newFiles?: { name: string, type: string, content: string }[]
   ) => Promise<boolean | void>; 
   onReview?: (taskId: string, decision: ReviewDecision, comment: string) => Promise<boolean>;
-  onDeleteAttachment?: (taskId: string, url: string, name: string) => Promise<boolean>;
+  onDeleteAttachments?: (taskId: string, items: { url: string; name: string }[]) => Promise<boolean>;
   onLoadAttachments?: (taskId: string) => Promise<void>;
 }
 
-const TaskDetailModal: React.FC<TaskDetailModalProps> = ({ task, isOpen, onClose, currentUser, onSave, onReview, onDeleteAttachment, onLoadAttachments }) => {
-  const [deletingUrl, setDeletingUrl] = useState<string | null>(null);
+const TaskDetailModal: React.FC<TaskDetailModalProps> = ({ task, isOpen, onClose, currentUser, onSave, onReview, onDeleteAttachments, onLoadAttachments }) => {
 
   // 舊附件只有網址 → 開啟時向後端補回原始檔名
   useEffect(() => {
     if (isOpen && task && onLoadAttachments && hasUnnamedAttachments(task)) onLoadAttachments(task.uid);
   }, [isOpen, task?.uid]);
 
-  const handleDeleteAttachment = async (url: string, name: string) => {
-    if (!task || !onDeleteAttachment) return;
-    setDeletingUrl(url);
-    try {
-      const ok = await onDeleteAttachment(task.uid, url, name);
-      if (ok) fetchTaskHistory(task.uid);
-    } finally {
-      setDeletingUrl(null);
-    }
+  const handleDeleteAttachments = async (taskId: string, items: { url: string; name: string }[]) => {
+    if (!onDeleteAttachments) return false;
+    const ok = await onDeleteAttachments(taskId, items);
+    if (ok) fetchTaskHistory(taskId);
+    return ok;
   };
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<TaskStatus | ''>('');
@@ -354,52 +350,12 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({ task, isOpen, onClose
             
             {taskAttachments(task).length > 0 ? (
               <div className="space-y-2">
-                {taskAttachments(task).map((att, uIdx) => {
-                  const url = att.url;
-                  const urlIsBase64 = url.startsWith('data:');
-                  const label = attachmentLabel(att, uIdx);
-                  const deletable = !!onDeleteAttachment && !urlIsBase64 && canDeleteAttachment(currentUser, task, att);
-                  return (
-                    <div key={url} className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50 transition-colors bg-white">
-                      <div className="flex items-center space-x-3 overflow-hidden">
-                        <div className="p-2 bg-gray-100 rounded shrink-0">
-                          <FileText className="w-5 h-5 text-gray-500" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-gray-900 truncate" title={label}>
-                            {label}
-                          </p>
-                          <p className="text-xs text-gray-400 truncate max-w-xs">
-                            {att.uploader ? `上傳者 ${att.uploader}` : (att.name ? '' : '讀取檔名中…')}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0 ml-2">
-                        <a 
-                          href={url}
-                          download={urlIsBase64 ? `proof_${task.uid}_${uIdx + 1}` : undefined}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center px-3 py-1.5 bg-gray-100 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap"
-                        >
-                          <Download className="w-3.5 h-3.5 mr-1" />
-                          開啟檢視
-                        </a>
-                        {deletable && (
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteAttachment(url, label)}
-                            disabled={deletingUrl === url}
-                            title="刪除此檔案（移至雲端硬碟垃圾桶）"
-                            className="flex items-center px-2.5 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded-lg hover:bg-red-100 border border-red-100 transition-colors whitespace-nowrap disabled:opacity-50"
-                          >
-                            {deletingUrl === url ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><Trash2 className="w-3.5 h-3.5 mr-1" />刪除</>}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                <AttachmentList
+                  task={task}
+                  currentUser={currentUser}
+                  onDeleteAttachments={onDeleteAttachments ? handleDeleteAttachments : undefined}
+                  variant="full"
+                />
                 {!isReviewer(currentUser) && task.status === TaskStatus.UNDER_REVIEW && (
                   <p className="text-xs text-gray-500">審核中無法刪除檔案。如需更換，請在下方把狀態改為「執行中」（撤回審查），刪除後再重新上傳並提送。</p>
                 )}

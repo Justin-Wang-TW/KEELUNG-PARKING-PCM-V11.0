@@ -383,9 +383,12 @@ const App: React.FC = () => {
     if (ok && Array.isArray(data?.attachments)) applyAttachments(taskId, data.attachments);
   };
 
-  const handleDeleteAttachment = async (taskId: string, url: string, name: string): Promise<boolean> => {
-    if (!window.confirm(`確定要刪除「${name}」嗎？\n\n檔案會移到雲端硬碟的垃圾桶（30 天內可由管理員還原），並留下操作紀錄。`)) return false;
-    const { ok, data, error } = await api('deleteAttachment', { uid: taskId, url });
+  /** 一次刪除多個附件：只送出一次請求 */
+  const handleDeleteAttachments = async (taskId: string, items: { url: string; name: string }[]): Promise<boolean> => {
+    if (items.length === 0) return false;
+    const list = items.slice(0, 10).map(it => `・${it.name}`).join('\n') + (items.length > 10 ? `\n…等共 ${items.length} 個檔案` : '');
+    if (!window.confirm(`確定要刪除以下 ${items.length} 個檔案嗎？\n\n${list}\n\n檔案會移到雲端硬碟的垃圾桶（30 天內可由管理員還原），並留下操作紀錄。`)) return false;
+    const { ok, data, error } = await api('deleteAttachment', { uid: taskId, urls: items.map(it => it.url) });
     if (ok && Array.isArray(data?.attachments)) {
       applyAttachments(taskId, data.attachments, data.attachmentUrl);
       return true;
@@ -597,7 +600,7 @@ const App: React.FC = () => {
           currentUser={currentUser}
           onClose={() => setEditingTask(null)}
           onSave={handleSaveTaskProgress}
-          onDeleteAttachment={handleDeleteAttachment}
+          onDeleteAttachments={handleDeleteAttachments}
           onLoadAttachments={handleLoadAttachments}
         />
       )}
@@ -620,7 +623,7 @@ const App: React.FC = () => {
           currentUser={currentUser}
           onSave={handleSaveTaskProgress}
           onReview={handleReviewTask}
-          onDeleteAttachment={handleDeleteAttachment}
+          onDeleteAttachments={handleDeleteAttachments}
           onLoadAttachments={handleLoadAttachments}
         />
       )}

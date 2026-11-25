@@ -1787,9 +1787,10 @@ function getAttachments_(p, s) {
 }
 
 /**
- * 刪除工項附件（檔案移到雲端硬碟垃圾桶，30 天內可還原）
+ * 刪除工項附件（可一次刪除多個；檔案移到雲端硬碟垃圾桶，30 天內可還原）
  *  - 三維 / 管理員：可刪除任何附件
  *  - 其他人：只能刪除自己上傳的檔案（舊資料無上傳者紀錄者亦可），且工項不可在審核中或已完成
+ *  - 勾選的檔案只要有一個不能刪，整批都不刪，並說明原因
  */
 function deleteAttachment_(p, s) {
   const found = findTask_(p.uid);
@@ -1800,26 +1801,48 @@ function deleteAttachment_(p, s) {
   if (!reviewer && t.status === STATUS.COMPLETED) return { success: false, msg: '工項已結案，無法刪除附件；如需更正請聯繫三維團隊' };
   if (!reviewer && t.status === STATUS.UNDER_REVIEW) return { success: false, msg: '工項審核中，無法刪除附件。如需更換檔案，請先將狀態改為「執行中」（撤回審查）' };
 
+  const urls = (Array.isArray(p.urls) ? p.urls : [p.url]).map(function (u) { return String(u || ''); }).filter(function (u) { return u; });
+  if (!urls.length) return { success: false, msg: '請先勾選要刪除的檔案' };
+  if (urls.length > 50) return { success: false, msg: '一次最多刪除 50 個檔案' };
+
   const cellRange = found.sh.getRange(found.rowNum, TC.ATTACH + 1);
   const list = parseAttachments_(cellRange.getValue());
-  const idx = list.map(function (a) { return a.url; }).indexOf(String(p.url || ''));
-  if (idx < 0) return { success: false, msg: '找不到這個附件，可能已被刪除，請重新整理' };
-  const target = list[idx];
-  if (!reviewer && target.uploader && target.uploader.toLowerCase() !== String(s.email).toLowerCase()) {
-    return { success: false, msg: '只能刪除自己上傳的檔案（此檔由 ' + target.uploader + ' 上傳）' };
+  const targets = [];
+  const missing = [];
+  const denied = [];
+  urls.forEach(function (u) {
+    const a = list.filter(function (x) { return x.url === u; })[0];
+    if (!a) { missing.push(u); return; }
+    if (!reviewer && a.uploader && a.uploader.toLowerCase() !== String(s.email).toLowerCase()) denied.push(a);
+    targets.push(a);
+  });
+  if (denied.length) {
+    return { success: false, msg: '只能刪除自己上傳的檔案，以下檔案不是你上傳的，整批未刪除：\n' + denied.map(function (a) { return '・' + (a.name || a.url) + '（' + a.uploader + '）'; }).join('\n') };
   }
-  if (!target.name) resolveAttachmentNames_([target]);
+  if (!targets.length) return { success: false, msg: '找不到勾選的附件，可能已被刪除，請重新整理' };
+  resolveAttachmentNames_(targets.filter(function (a) { return !a.name; }));
 
-  let trashed = false;
-  const id = driveFileIdFromUrl_(target.url);
-  if (id) {
-    try { DriveApp.getFileById(id).setTrashed(true); trashed = true; } catch (e) { Logger.log('移至垃圾桶失敗: ' + e); }
-  }
-  list.splice(idx, 1);
-  cellRange.setValue(serializeAttachments_(list));
+  let trashedCount = 0;
+  targets.forEach(function (a) {
+    const id = driveFileIdFromUrl_(a.url);
+    if (!id) return;
+    try { DriveApp.getFileById(id).setTrashed(true); trashedCount++; } catch (e) { Logger.log('移至垃圾桶失敗: ' + e); }
+  });
+  const removeSet = {};
+  targets.forEach(function (a) { removeSet[a.url] = true; });
+  const remaining = list.filter(function (a) { return !removeSet[a.url]; });
+  cellRange.setValue(serializeAttachments_(remaining));
   found.sh.getRange(found.rowNum, TC.UPDATED + 1).setValue(new Date());
-  writeLog('刪除附件', t.uid, (target.name || target.url) + (trashed ? '（已移至雲端硬碟垃圾桶）' : '（僅移除連結）') + '｜' + target.url, s.email);
-  return { success: true, attachments: list, attachmentUrl: serializeAttachments_(list) };
+  writeLog('刪除附件', t.uid,
+    '刪除 ' + targets.length + ' 個檔案（' + trashedCount + ' 個已移至雲端硬碟垃圾桶）：' +
+    targets.map(function (a) { return (a.name || '未命名') + '｜' + a.url; }).join('；'), s.email);
+  return {
+    success: true,
+    deleted: targets.length,
+    notFound: missing.length,
+    attachments: remaining,
+    attachmentUrl: serializeAttachments_(remaining)
+  };
 }
 
 // ==========================================
