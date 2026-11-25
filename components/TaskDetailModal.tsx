@@ -1,0 +1,575 @@
+
+import React, { useState, useEffect } from 'react';
+import { Task, User, TaskStatus, AuditLog, ReviewDecision } from '../types';
+import { STATUS_COLORS, STATIONS } from '../constants';
+import { api } from '../api';
+import { getDisplayStatus, selectableStatuses, defaultSelectedStatus, isReviewer, isDefect, formatDate, formatDateTime, daysUntil } from '../taskStatus';
+import { 
+  X, FileText, Download, User as UserIcon, Calendar, 
+  MapPin, Paperclip, Clock, Send, Loader2, CheckCircle2, History,
+  MessageSquare, AlertCircle, Trash2, ShieldCheck, Undo2, Wrench
+} from 'lucide-react';
+
+interface TaskDetailModalProps {
+  task: Task | null;
+  isOpen: boolean;
+  onClose: () => void;
+  currentUser: User | null;
+  // Updated signature to accept multiple files up to 15
+  onSave: (
+    taskId: string, 
+    newStatus: TaskStatus, 
+    currentAttachmentUrl?: string,
+    newFile?: { name: string, type: string, content: string },
+    newFiles?: { name: string, type: string, content: string }[]
+  ) => Promise<boolean | void>; 
+  onReview?: (taskId: string, decision: ReviewDecision, comment: string) => Promise<boolean>;
+}
+
+const TaskDetailModal: React.FC<TaskDetailModalProps> = ({ task, isOpen, onClose, currentUser, onSave, onReview }) => {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedStatus, setSelectedStatus] = useState<TaskStatus | ''>('');
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'success'>('idle');
+  
+  // History Logs State
+  const [historyLogs, setHistoryLogs] = useState<AuditLog[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  // Comments State
+  const [comments, setComments] = useState<import('../types').Comment[]>([]);
+  const [newComment, setNewComment] = useState('');
+  const [isSendingComment, setIsSendingComment] = useState(false);
+
+  // Review State
+  const [reviewComment, setReviewComment] = useState('');
+  const [isReviewing, setIsReviewing] = useState(false);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const incoming = Array.from(e.target.files);
+      setSelectedFiles(prev => {
+        const combined = [...prev, ...incoming];
+        if (combined.length > 15) {
+          alert('每次最多可上傳 15 個檔案，已為您保留前 15 個。');
+          return combined.slice(0, 15);
+        }
+        return combined;
+      });
+      e.target.value = '';
+    }
+  };
+
+  const handleRemoveFile = (index: number) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  useEffect(() => {
+    if (task && isOpen) {
+      setSelectedStatus(defaultSelectedStatus(currentUser, task));
+      setReviewComment('');
+      fetchTaskHistory(task.uid);
+      fetchComments(task.uid);
+    }
+  }, [task?.uid, task?.status, isOpen]);
+
+  const fetchTaskHistory = async (uid: string) => {
+    setIsLoadingHistory(true);
+    try {
+      const { ok, data } = await api('getTaskLogs', { uid });
+      if (ok && Array.isArray(data?.logs)) {
+        const sortedLogs = data.logs.sort((a: AuditLog, b: AuditLog) => 
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        );
+        setHistoryLogs(sortedLogs);
+      } else {
+        setHistoryLogs([]);
+      }
+    } catch (error) {
+      console.error("無法取得歷史紀錄", error);
+      setHistoryLogs([]);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  const fetchComments = async (uid: string) => {
+    try {
+      const { ok, data } = await api('getComments', { taskUid: uid });
+      if (ok && Array.isArray(data?.comments)) {
+        setComments(data.comments.sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()));
+      } else {
+        setComments([]);
+      }
+    } catch (error) {
+      console.error("無法取得留言", error);
+    }
+  };
+
+  const handleSendComment = async () => {
+    if (!newComment.trim() || !currentUser || !task) return;
+    setIsSendingComment(true);
+    try {
+      const { ok, error } = await api('addComment', { taskUid: task.uid, content: newComment });
+      if (ok) {
+        setNewComment('');
+        fetchComments(task.uid);
+      } else {
+        alert('留言失敗: ' + error);
+      }
+    } catch (error) {
+      alert('連線錯誤');
+    } finally {
+      setIsSendingComment(false);
+    }
+  };
+
+  if (!isOpen || !task) return null;
+
+  const formatDeadline = (dateStr: string) => formatDate(dateStr);
+  const displayStatus = getDisplayStatus(task);
+  const reviewer = isReviewer(currentUser);
+  const canReview = reviewer && !!onReview && task.status === TaskStatus.UNDER_REVIEW;
+  const isClosedForUser = task.status === TaskStatus.COMPLETED && !reviewer;
+
+  // SLA Calculation
+  const daysLeft = daysUntil(task.deadline);
+  const slaStatus = (task.status !== TaskStatus.COMPLETED && task.status !== TaskStatus.UNDER_REVIEW && !isNaN(daysLeft) && daysLeft < 0)
+    ? { overdueDays: -daysLeft } : null;
+
+  const handleReview = async (decision: ReviewDecision) => {
+    if (!onReview) return;
+    if (decision === 'return' && !reviewComment.trim()) {
+      alert('退回補正時請填寫審查意見，讓業者知道要補什麼。');
+      return;
+    }
+    if (decision === 'approve' && !window.confirm('確認核准並結案此工項？')) return;
+    setIsReviewing(true);
+    try {
+      const ok = await onReview(task.uid, decision, reviewComment.trim());
+      if (ok) onClose();
+    } finally {
+      setIsReviewing(false);
+    }
+  };
+
+  const handleUpdateStatus = async () => {
+    if (!selectedStatus) {
+      alert('請選擇目前的執行狀態');
+      return;
+    }
+    if (!currentUser) {
+      alert('登入逾時，請重新登入');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      let filesData: { name: string, type: string, content: string }[] | undefined = undefined;
+      
+      if (selectedFiles.length > 0) {
+        filesData = await Promise.all(
+          selectedFiles.map(async (file) => {
+            const base64Content = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.readAsDataURL(file);
+              reader.onload = () => resolve(reader.result as string);
+              reader.onerror = (error) => reject(error);
+            });
+
+            return {
+              name: file.name,
+              type: file.type,
+              content: base64Content
+            };
+          })
+        );
+      }
+
+      const primaryFile = filesData && filesData.length > 0 ? filesData[0] : undefined;
+      const saved = await onSave(task.uid, selectedStatus as TaskStatus, task.attachmentUrl, primaryFile, filesData);
+      if (saved === false) return;
+
+      setUploadStatus('success');
+      // Refresh history after save
+      fetchTaskHistory(task.uid);
+
+      setTimeout(() => {
+        onClose();
+        setUploadStatus('idle');
+        setSelectedFiles([]);
+      }, 1500);
+
+    } catch (error) {
+      console.error('提交失敗:', error);
+      alert('提交過程中發生錯誤，請稍後再試');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const isBase64 = task.attachmentUrl?.startsWith('data:');
+  
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col animate-fade-in">
+        
+        {/* Header */}
+        <div className="p-5 border-b flex justify-between items-start bg-gray-50 rounded-t-xl shrink-0">
+          <div className="flex-1 pr-4">
+            <div className="flex items-center space-x-2 mb-2">
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-gray-200 text-gray-700">
+                <MapPin className="w-3 h-3 mr-1" />
+                {STATIONS.find(s => s.code === task.stationCode)?.name || task.stationName || task.stationCode}
+              </span>
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold border ${STATUS_COLORS[displayStatus]}`}>
+                {displayStatus}
+              </span>
+              {isDefect(task) && (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                  <Wrench className="w-3 h-3 mr-1" /> 缺失改善
+                </span>
+              )}
+            </div>
+            <h3 className="text-xl font-bold text-gray-900 leading-snug">{task.itemName}</h3>
+            <p className="text-xs font-mono text-gray-400 mt-1">UID: {task.uid}</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition-colors">
+            <X className="w-6 h-6 text-gray-500" />
+          </button>
+        </div>
+
+        {/* Content Body */}
+        <div className="p-6 overflow-y-auto flex-1 space-y-8">
+
+          {/* 0. Review status banners */}
+          {task.status === TaskStatus.RETURNED && (
+            <div className="p-4 rounded-lg border border-purple-200 bg-purple-50">
+              <p className="text-sm font-bold text-purple-800 flex items-center"><Undo2 className="w-4 h-4 mr-1.5" /> 已退回補正，請依審查意見補件後重新提送審查</p>
+              {task.reviewComment && <p className="text-sm text-purple-900 mt-2 whitespace-pre-wrap">審查意見：{task.reviewComment}</p>}
+              <p className="text-xs text-purple-600 mt-1">審查人 {task.reviewer || '-'}・{formatDateTime(task.reviewedAt)}</p>
+            </div>
+          )}
+          {task.status === TaskStatus.UNDER_REVIEW && (
+            <div className="p-4 rounded-lg border border-amber-200 bg-amber-50">
+              <p className="text-sm font-bold text-amber-800 flex items-center"><ShieldCheck className="w-4 h-4 mr-1.5" /> 已提送審查，等待三維團隊審核</p>
+              <p className="text-xs text-amber-700 mt-1">提送時間 {formatDateTime(task.submittedAt)}・提送人 {task.executorEmail || '-'}</p>
+            </div>
+          )}
+          {task.status === TaskStatus.COMPLETED && task.reviewer && (
+            <div className="p-3 rounded-lg border border-green-200 bg-green-50 text-xs text-green-800">
+              已由 {task.reviewer} 於 {formatDateTime(task.reviewedAt)} 核准結案{task.reviewComment ? `：${task.reviewComment}` : ''}
+            </div>
+          )}
+          {isDefect(task) && task.status !== TaskStatus.COMPLETED && (
+            <div className="p-3 rounded-lg border border-rose-200 bg-rose-50 text-xs text-rose-800">
+              此為每月場館檢核發現異常所開立的缺失改善單。附件中第一批照片為檢核時的現況，改善完成後請上傳「改善後照片」並提送審查。
+            </div>
+          )}
+
+          {/* 0.5 Reviewer panel */}
+          {canReview && (
+            <div className="p-5 rounded-xl border-2 border-amber-300 bg-white">
+              <h4 className="text-sm font-bold text-amber-800 mb-3 flex items-center"><ShieldCheck className="w-4 h-4 mr-2" /> 審查</h4>
+              <textarea
+                value={reviewComment}
+                onChange={(e) => setReviewComment(e.target.value)}
+                rows={3}
+                placeholder="審查意見（退回時必填，核准時可留空）"
+                className="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-amber-400 outline-none"
+              />
+              <div className="flex gap-3 mt-3">
+                <button
+                  onClick={() => handleReview('approve')}
+                  disabled={isReviewing}
+                  className="flex-1 py-2.5 rounded-lg bg-green-600 hover:bg-green-700 text-white font-bold text-sm flex items-center justify-center disabled:opacity-60"
+                >
+                  {isReviewing ? <Loader2 className="w-4 h-4 animate-spin" /> : <><CheckCircle2 className="w-4 h-4 mr-1.5" /> 核准結案</>}
+                </button>
+                <button
+                  onClick={() => handleReview('return')}
+                  disabled={isReviewing}
+                  className="flex-1 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-bold text-sm flex items-center justify-center disabled:opacity-60"
+                >
+                  <Undo2 className="w-4 h-4 mr-1.5" /> 退回補正
+                </button>
+              </div>
+            </div>
+          )}
+          
+          {/* 1. Metadata Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+              <span className="text-xs font-bold text-gray-500 uppercase flex items-center mb-1">
+                <Calendar className="w-3 h-3 mr-1" /> 截止日期
+              </span>
+              <p className={`font-medium ${slaStatus ? 'text-red-600' : 'text-gray-800'}`}>
+                {formatDeadline(task.deadline)}
+              </p>
+              {slaStatus && (
+                <div className="mt-2 pt-2 border-t border-gray-200">
+                  <p className="text-xs text-red-600 font-bold flex items-center">
+                    <AlertCircle className="w-3 h-3 mr-1" />
+                    已逾期 {slaStatus.overdueDays} 天
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+              <span className="text-xs font-bold text-gray-500 uppercase flex items-center mb-1">
+                <Clock className="w-3 h-3 mr-1" /> 最後更新時間
+              </span>
+              <p className="font-medium text-gray-800">
+                {task.lastUpdated ? new Date(task.lastUpdated).toLocaleString() : '-'}
+              </p>
+            </div>
+          </div>
+
+          {/* 2. Uploaded Attachment */}
+          <div>
+            <h4 className="text-sm font-bold text-gray-700 mb-3 flex items-center border-b pb-2">
+              <Paperclip className="w-4 h-4 mr-2 text-blue-600" />
+              目前佐證資料附件
+            </h4>
+            
+            {task.attachmentUrl ? (
+              <div className="space-y-2">
+                {task.attachmentUrl.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).map((url, uIdx) => {
+                  const urlIsBase64 = url.startsWith('data:');
+                  return (
+                    <div key={uIdx} className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50 transition-colors bg-white">
+                      <div className="flex items-center space-x-3 overflow-hidden">
+                        <div className="p-2 bg-gray-100 rounded shrink-0">
+                          <FileText className="w-5 h-5 text-gray-500" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">
+                            {urlIsBase64 ? `已上傳之佐證檔案 (${uIdx + 1})` : `附件檔案 (${uIdx + 1})`}
+                          </p>
+                          <p className="text-xs text-gray-400 truncate max-w-xs">{url}</p>
+                        </div>
+                      </div>
+                      <a 
+                        href={url}
+                        download={urlIsBase64 ? `proof_${task.uid}_${uIdx + 1}` : undefined}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center px-3 py-1.5 bg-gray-100 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-200 transition-colors whitespace-nowrap shrink-0 ml-2"
+                      >
+                        <Download className="w-3.5 h-3.5 mr-1" />
+                        開啟檢視
+                      </a>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-center py-4 bg-gray-50 rounded-lg border border-dashed border-gray-300">
+                <p className="text-gray-400 text-sm">目前尚無上傳佐證資料</p>
+              </div>
+            )}
+          </div>
+
+          {/* 3. Comments & Discussion */}
+          <div>
+            <h4 className="text-sm font-bold text-gray-700 mb-4 flex items-center border-b pb-2">
+              <MessageSquare className="w-4 h-4 mr-2 text-blue-600" />
+              溝通與留言板
+            </h4>
+            
+            <div className="bg-gray-50 rounded-lg p-4 mb-4 max-h-60 overflow-y-auto space-y-3">
+              {comments.length === 0 ? (
+                <p className="text-center text-gray-400 text-sm py-2">尚無留言，歡迎發起討論</p>
+              ) : (
+                comments.map((comment) => (
+                  <div key={comment.id} className="flex space-x-3">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-xs">
+                      {comment.userName.charAt(0)}
+                    </div>
+                    <div className="flex-1 bg-white p-3 rounded-lg shadow-sm border border-gray-100">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-xs font-bold text-gray-700">{comment.userName}</span>
+                        <span className="text-[10px] text-gray-400">{new Date(comment.timestamp).toLocaleString()}</span>
+                      </div>
+                      <p className="text-sm text-gray-800 whitespace-pre-wrap">{comment.content}</p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            
+            <div className="flex items-start space-x-2">
+              <textarea
+                value={newComment}
+                onChange={(e) => setNewComment(e.target.value)}
+                placeholder="輸入留言..."
+                className="flex-1 p-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                rows={2}
+              />
+              <button
+                onClick={handleSendComment}
+                disabled={isSendingComment || !newComment.trim()}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:bg-gray-300 transition-colors"
+              >
+                {isSendingComment ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          {/* 4. History Timeline */}
+          <div>
+            <h4 className="text-sm font-bold text-gray-700 mb-4 flex items-center border-b pb-2">
+              <History className="w-4 h-4 mr-2 text-blue-600" />
+              履約歷程紀錄 (Audit Log)
+            </h4>
+            
+            {isLoadingHistory ? (
+              <div className="flex justify-center py-6">
+                 <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+              </div>
+            ) : historyLogs.length === 0 ? (
+               <div className="text-center py-6 text-gray-400 text-sm bg-gray-50 rounded-lg">
+                 尚無歷史操作紀錄
+               </div>
+            ) : (
+              <div className="relative pl-4 border-l-2 border-gray-200 space-y-6 ml-2">
+                {historyLogs.map((log) => (
+                  <div key={log.id} className="relative">
+                    {/* Timeline Dot */}
+                    <div className="absolute -left-[21px] top-1 h-3 w-3 rounded-full bg-white border-2 border-blue-400"></div>
+                    
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1">
+                      <div>
+                        <span className="text-xs font-bold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                           {log.action}
+                        </span>
+                        <p className="text-sm font-medium text-gray-800 mt-1">
+                          {log.details}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                         <p className="text-xs text-gray-500 font-mono">
+                           {new Date(log.timestamp).toLocaleDateString()}
+                         </p>
+                         <p className="text-xs text-gray-400 font-mono">
+                           {new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                         </p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1 flex items-center">
+                      <UserIcon className="w-3 h-3 mr-1" />
+                      {log.userEmail}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 5. Update Form */}
+          {isClosedForUser ? (
+            <div className="bg-green-50 p-4 rounded-xl border border-green-100 text-sm text-green-800 text-center">
+              此工項已結案。如需補件或修改，請透過留言板聯繫三維團隊。
+            </div>
+          ) : (
+          <div className="bg-blue-50/50 p-5 rounded-xl border border-blue-100">
+            <h4 className="text-sm font-bold text-blue-800 mb-4 flex items-center">
+              <Send className="w-4 h-4 mr-2" />
+              提交進度更新
+            </h4>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-500 mb-1">執行狀態更新</label>
+                <select 
+                  className="w-full p-2.5 border rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500"
+                  value={selectedStatus}
+                  onChange={(e) => setSelectedStatus(e.target.value as TaskStatus)}
+                >
+                  {selectableStatuses(currentUser, task).map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                {!reviewer && (
+                  <p className="text-xs text-gray-500 mt-1">辦理完成並上傳佐證後，請選「提送審查」，由三維團隊審查後結案。</p>
+                )}
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-bold text-gray-500">上傳佐證檔案 (圖片、PDF 或 Word)</label>
+                  <span className="text-xs text-blue-600 font-medium">
+                    {selectedFiles.length > 0 ? `已選取 ${selectedFiles.length}/15 個` : '最多 15 個，不限大小'}
+                  </span>
+                </div>
+                {selectedFiles.length < 15 && (
+                  <input 
+                    type="file" 
+                    multiple
+                    onChange={handleFileChange}
+                    accept="image/*,.pdf,.doc,.docx"
+                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-100 file:text-blue-700 hover:file:bg-blue-200 cursor-pointer"
+                  />
+                )}
+                {selectedFiles.length > 0 && (
+                  <div className="mt-2 space-y-1.5 max-h-36 overflow-y-auto">
+                    {selectedFiles.map((file, idx) => (
+                      <div key={idx} className="flex items-center justify-between p-2 bg-white rounded border border-blue-100 text-xs shadow-xs">
+                        <div className="flex items-center space-x-2 truncate">
+                          <FileText className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                          <span className="font-medium text-gray-800 truncate">{file.name}</span>
+                          <span className="text-gray-400 shrink-0">
+                            ({file.size > 1024 * 1024 ? `${(file.size / (1024 * 1024)).toFixed(2)} MB` : `${(file.size / 1024).toFixed(1)} KB`})
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveFile(idx)}
+                          className="text-gray-400 hover:text-red-500 ml-2 shrink-0 p-1"
+                          title="移除"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={handleUpdateStatus}
+                disabled={isSubmitting || !selectedStatus}
+                className={`w-full py-3 rounded-lg text-white font-bold flex items-center justify-center transition-all ${
+                  isSubmitting ? 'bg-blue-400' : 'bg-blue-600 hover:bg-blue-700 shadow-md'
+                }`}
+              >
+                {isSubmitting ? (
+                  <><Loader2 className="w-5 h-5 mr-2 animate-spin" /> 正在處理並上傳檔案...</>
+                ) : uploadStatus === 'success' ? (
+                  <><CheckCircle2 className="w-5 h-5 mr-2" /> 更新成功！</>
+                ) : selectedStatus === TaskStatus.UNDER_REVIEW ? (
+                  '確認提送審查'
+                ) : (
+                  '確認提交回報'
+                )}
+              </button>
+            </div>
+          </div>
+          )}
+        </div>
+
+        <div className="p-4 border-t bg-gray-50 rounded-b-xl flex justify-end shrink-0">
+          <button 
+            onClick={onClose}
+            className="px-6 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-900 transition-colors text-sm font-medium"
+          >
+            關閉視窗
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default TaskDetailModal;
