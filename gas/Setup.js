@@ -6,6 +6,7 @@
  *   2. setupV11()                 正式升級：備份 → 欄位/資料整理 → 建立留言表 → 更新系統說明 → 安裝排程
  *   3. redactPlaintextPasswords() 把 Messages 分頁舊訊息中的明文預設密碼遮蔽（確認後再執行）
  *   4. previewDailyReminders()    預覽明天提醒信會寄給誰（不寄信）
+ *   5. upgradeAttachmentNames()   一次把所有舊附件補上原始檔名（不執行也可以，開啟工項時會自動補）
  *
  * 可在「專案設定 → 指令碼屬性」調整：
  *   SYSTEM_URL         信件中的系統網址（預設 https://keelung-parking.vercel.app/）
@@ -259,4 +260,22 @@ function redactPlaintextPasswords() {
   writeLog('資安清理', '', '遮蔽 Messages 明文密碼 ' + count + ' 則', Session.getEffectiveUser().getEmail());
   Logger.log('已遮蔽 ' + count + ' 則訊息中的密碼');
   return count;
+}
+
+/** 一次把 1_任務執行表 所有舊附件（只有網址）補上雲端硬碟上的原始檔名 */
+function upgradeAttachmentNames() {
+  const data = readTasks_();
+  let rows = 0, files = 0;
+  data.rows.forEach(function (r) {
+    const list = parseAttachments_(r.raw[TC.ATTACH]);
+    const before = list.filter(function (a) { return !a.name; }).length;
+    if (!before) return;
+    if (resolveAttachmentNames_(list)) {
+      data.sh.getRange(r.rowNum, TC.ATTACH + 1).setValue(serializeAttachments_(list));
+      rows++;
+      files += before - list.filter(function (a) { return !a.name; }).length;
+    }
+  });
+  Logger.log('已補上檔名：' + rows + ' 筆工項、' + files + ' 個檔案');
+  return { rows: rows, files: files };
 }

@@ -7,6 +7,12 @@ export enum TaskStatus {
   OVERDUE = '逾期',
 }
 
+export interface Attachment {
+  name: string;      // 原始檔名（舊資料可能為空，開啟工項時會自動補上）
+  url: string;
+  uploader?: string; // 上傳者 Email
+}
+
 export enum TaskType {
   NORMAL = '一般',
   DEFECT = '缺失改善',
@@ -46,6 +52,7 @@ export interface Task {
   attachmentUrl?: string;
   recurrence?: RecurrenceType | string;
   recurrenceGroupId?: string; // To group recurring tasks together
+  attachments?: Attachment[];    // 後端解析後的附件清單（含原始檔名）
   taskType?: TaskType | string;  // 一般 / 缺失改善
   sourceRef?: string;            // 缺失改善單來源：CHK:<提交ID>:<項目ID>
   submittedAt?: string;          // 提送審查時間 (ISO)

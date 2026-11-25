@@ -1,4 +1,4 @@
-import { Task, TaskStatus, TaskType, User, UserRole, StationCode } from './types';
+import { Task, TaskStatus, TaskType, User, UserRole, StationCode, Attachment } from './types';
 
 /** 今天（使用者電腦時區）的 yyyy-MM-dd */
 export function todayStr(): string {
@@ -115,4 +115,35 @@ export function defaultSelectedStatus(user: User | null, task: Task): TaskStatus
   if (options.includes(task.status as TaskStatus)) return task.status as TaskStatus;
   if (task.status === TaskStatus.RETURNED) return TaskStatus.UNDER_REVIEW;
   return options[0];
+}
+
+// ---------- 附件 ----------
+
+/** 解析舊格式（只有網址）或新格式（檔名 | 網址 | 上傳者） */
+function parseAttachmentLine(line: string): Attachment | null {
+  const s = line.trim();
+  if (!s) return null;
+  if (/^(https?:\/\/|data:)/.test(s)) return { name: '', url: s };
+  const m = s.match(/^(.*?) \| (https?:\/\/\S+?)(?: \| (\S+))?$/);
+  if (m) return { name: m[1], url: m[2], uploader: m[3] || '' };
+  return { name: '', url: s };
+}
+
+export function taskAttachments(task: Task): Attachment[] {
+  if (Array.isArray(task.attachments)) return task.attachments;
+  return String(task.attachmentUrl || '').split(/\n+/).map(parseAttachmentLine).filter((a): a is Attachment => !!a && !!a.url);
+}
+
+export function attachmentLabel(att: Attachment, index: number): string {
+  return att.name || `佐證檔案 ${index + 1}`;
+}
+
+export const hasUnnamedAttachments = (task: Task) => taskAttachments(task).some(a => !a.name && /^https?:/.test(a.url));
+
+/** 與後端規則一致：三維/管理員可刪任何附件；其他人只能刪自己上傳的，且工項不可在審核中或已完成 */
+export function canDeleteAttachment(user: User | null, task: Task, att: Attachment): boolean {
+  if (!user) return false;
+  if (isReviewer(user)) return true;
+  if (task.status === TaskStatus.COMPLETED || task.status === TaskStatus.UNDER_REVIEW) return false;
+  return !att.uploader || att.uploader.toLowerCase() === user.email.toLowerCase();
 }

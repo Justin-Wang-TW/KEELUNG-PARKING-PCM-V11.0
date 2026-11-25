@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Task, TaskStatus, User } from '../types';
-import { selectableStatuses, defaultSelectedStatus, isReviewer } from '../taskStatus';
+import { selectableStatuses, defaultSelectedStatus, isReviewer, taskAttachments, attachmentLabel, canDeleteAttachment, hasUnnamedAttachments } from '../taskStatus';
 import { X, Upload, FileText, Trash2, Link as LinkIcon, Loader2, Paperclip } from 'lucide-react';
 
 interface EditTaskModalProps {
@@ -16,9 +16,17 @@ interface EditTaskModalProps {
     newFile?: { name: string, type: string, content: string },
     newFiles?: { name: string, type: string, content: string }[]
   ) => Promise<boolean | void>;
+  onDeleteAttachment?: (taskId: string, url: string, name: string) => Promise<boolean>;
+  onLoadAttachments?: (taskId: string) => Promise<void>;
 }
 
-const EditTaskModal: React.FC<EditTaskModalProps> = ({ task, isOpen, currentUser, onClose, onSave }) => {
+const EditTaskModal: React.FC<EditTaskModalProps> = ({ task, isOpen, currentUser, onClose, onSave, onDeleteAttachment, onLoadAttachments }) => {
+  const [deletingUrl, setDeletingUrl] = useState<string | null>(null);
+
+  // 舊附件只有網址 → 開啟時向後端補回原始檔名
+  useEffect(() => {
+    if (isOpen && task && onLoadAttachments && hasUnnamedAttachments(task)) onLoadAttachments(task.uid);
+  }, [isOpen, task?.uid]);
   const [status, setStatus] = useState<TaskStatus>(TaskStatus.PENDING);
   const [currentAttachment, setCurrentAttachment] = useState(''); // Stores the existing URL string
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]); // Stores up to 15 selected files
@@ -30,7 +38,12 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ task, isOpen, currentUser
       setCurrentAttachment(task.attachmentUrl || '');
       setSelectedFiles([]);
     }
-  }, [task]);
+    // 只在換一筆工項時重設；刪除附件後不清掉已選的新檔案
+  }, [task?.uid]);
+
+  useEffect(() => {
+    if (task) setCurrentAttachment(task.attachmentUrl || '');
+  }, [task?.attachmentUrl]);
 
   if (!isOpen || !task) return null;
 
@@ -189,7 +202,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ task, isOpen, currentUser
               </div>
             )}
 
-            {currentAttachment && (
+            {task && taskAttachments(task).length > 0 && (
               <div className="mt-3 p-3 bg-gray-50 rounded border border-gray-200">
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center">
@@ -197,22 +210,42 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ task, isOpen, currentUser
                     <p className="text-xs text-gray-700 font-bold">目前已儲存的佐證資料：</p>
                   </div>
                   <span className="text-[11px] text-gray-400">
-                    共 {currentAttachment.split(/[\n,]+/).map(u => u.trim()).filter(Boolean).length} 個檔案
+                    共 {taskAttachments(task).length} 個檔案
                   </span>
                 </div>
-                <div className="space-y-1.5 max-h-32 overflow-y-auto">
-                  {currentAttachment.split(/[\n,]+/).map(u => u.trim()).filter(Boolean).map((url, uIdx) => (
-                    <a 
-                      key={uIdx}
-                      href={url} 
-                      target="_blank" 
-                      rel="noopener noreferrer" 
-                      className="text-xs text-blue-600 hover:text-blue-800 hover:underline break-all flex items-center p-1 hover:bg-blue-50 rounded transition-colors"
-                    >
-                      <Paperclip className="w-3 h-3 mr-1 text-blue-500 shrink-0" />
-                      <span className="truncate">{url.startsWith('data:') ? `檢視佐證檔案 (${uIdx + 1})` : `開啟佐證檔案 (${uIdx + 1}) - ${url}`}</span>
-                    </a>
-                  ))}
+                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                  {task && taskAttachments(task).map((att, uIdx) => {
+                    const label = attachmentLabel(att, uIdx);
+                    const deletable = !!onDeleteAttachment && !att.url.startsWith('data:') && canDeleteAttachment(currentUser, task, att);
+                    return (
+                      <div key={att.url} className="flex items-center justify-between gap-2 p-1 hover:bg-blue-50 rounded transition-colors">
+                        <a
+                          href={att.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={label}
+                          className="text-xs text-blue-600 hover:text-blue-800 hover:underline flex items-center min-w-0"
+                        >
+                          <Paperclip className="w-3 h-3 mr-1 text-blue-500 shrink-0" />
+                          <span className="truncate">{label}</span>
+                        </a>
+                        {deletable && (
+                          <button
+                            type="button"
+                            disabled={deletingUrl === att.url || isSubmitting}
+                            onClick={async () => {
+                              setDeletingUrl(att.url);
+                              try { await onDeleteAttachment!(task.uid, att.url, label); } finally { setDeletingUrl(null); }
+                            }}
+                            title="刪除此檔案（移至雲端硬碟垃圾桶）"
+                            className="shrink-0 text-[11px] px-2 py-0.5 rounded border border-red-200 text-red-600 bg-white hover:bg-red-50 disabled:opacity-50"
+                          >
+                            {deletingUrl === att.url ? '刪除中…' : '刪除'}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
                 {selectedFiles.length > 0 && (
                   <p className="text-[11px] text-amber-600 font-medium mt-1.5 pt-1.5 border-t border-gray-200">

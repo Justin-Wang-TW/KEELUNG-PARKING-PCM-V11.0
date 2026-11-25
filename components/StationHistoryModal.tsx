@@ -1,7 +1,7 @@
 import React from 'react';
 import { Task, TaskStatus } from '../types';
 import { STATUS_COLORS } from '../constants';
-import { getDisplayStatus, STATUS_PRIORITY } from '../taskStatus';
+import { getDisplayStatus, STATUS_PRIORITY, taskAttachments, attachmentLabel } from '../taskStatus';
 import { X, ListTodo, ExternalLink, Calendar, AlertCircle } from 'lucide-react';
 
 interface StationHistoryModalProps {
@@ -101,15 +101,21 @@ const StationHistoryModal: React.FC<StationHistoryModalProps> = ({ stationName, 
                         {task.executorEmail || '-'}
                       </td>
                       <td className="px-4 py-4 text-right align-top">
-                        {task.attachmentUrl ? (
-                          <a 
-                            href={task.attachmentUrl} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors"
-                          >
-                            檢視附件 <ExternalLink className="w-3 h-3 ml-1" />
-                          </a>
+                        {taskAttachments(task).length > 0 ? (
+                          <div className="flex flex-col items-end gap-1">
+                            {taskAttachments(task).map((att, i) => (
+                              <a 
+                                key={i}
+                                href={att.url} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                title={attachmentLabel(att, i)}
+                                className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors max-w-[14rem]"
+                              >
+                                <span className="truncate">{attachmentLabel(att, i)}</span> <ExternalLink className="w-3 h-3 ml-1 shrink-0" />
+                              </a>
+                            ))}
+                          </div>
                         ) : (
                           <span className="text-gray-300 text-xs">未上傳</span>
                         )}

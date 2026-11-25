@@ -617,6 +617,8 @@ const ROUTES = {
   updateTaskMetadata: { roles: TASK_MANAGER_ROLES, write: true, fn: function (p, s) { return updateTaskMetadata_(p, s); } },
   deleteTask: { roles: TASK_MANAGER_ROLES, write: true, fn: function (p, s) { return deleteTask_(p, s); } },
   addComment: { roles: ANY_ROLE, write: true, fn: function (p, s) { return addComment_(p, s); } },
+  getAttachments: { roles: ANY_ROLE, write: true, fn: function (p, s) { return getAttachments_(p, s); } },
+  deleteAttachment: { roles: ANY_ROLE, write: true, fn: function (p, s) { return deleteAttachment_(p, s); } },
 
   // 場館檢核
   submitChecklist: { roles: REVIEWER_ROLES, write: true, fn: function (p, s) { return submitChecklist_(p.data, s); } },
@@ -898,6 +900,7 @@ function rowToTask_(r) {
     executorEmail: String(r[TC.EXECUTOR] || ''),
     lastUpdated: toIso_(r[TC.UPDATED]),
     attachmentUrl: String(r[TC.ATTACH] || ''),
+    attachments: parseAttachments_(r[TC.ATTACH]),
     recurrence: String(r[TC.RECURRENCE] || ''),
     recurrenceGroupId: String(r[TC.GROUP] || ''),
     taskType: String(r[TC.TYPE] || '').trim() || (String(r[TC.ITEM_CODE]).trim() === 'DEFECT' ? TASK_TYPE.DEFECT : TASK_TYPE.NORMAL),
@@ -1036,11 +1039,14 @@ function updateTaskProgress_(p, s) {
   const fileData = p.files || p.file;
   let finalUrl = t.attachmentUrl || '';
   let uploadedCount = 0;
+  let uploadedNames = [];
   if (fileData) {
-    const uploadUrl = saveFileToDrive(fileData, 'Task_' + t.uid);
-    if (uploadUrl) {
-      uploadedCount = uploadUrl.split('\n').length;
-      finalUrl = finalUrl ? finalUrl + '\n' + uploadUrl : uploadUrl;
+    const uploaded = uploadFiles_(fileData, 'Task_' + t.uid);
+    if (uploaded.length) {
+      uploadedCount = uploaded.length;
+      uploadedNames = uploaded.map(function (f) { return f.name; });
+      const lines = uploaded.map(function (f) { return formatAttachmentLine_(f.name, f.url, s.email); }).join('\n');
+      finalUrl = finalUrl ? finalUrl + '\n' + lines : lines;
     }
   }
 
@@ -1065,7 +1071,7 @@ function updateTaskProgress_(p, s) {
   if (status === STATUS.UNDER_REVIEW && t.status !== STATUS.UNDER_REVIEW) {
     notifyReviewers_('【待審查】' + t.stationName + '：' + t.itemName + '（提送人 ' + (s.name || s.email) + '）', t.uid, s.email);
   }
-  writeLog('進度匯報', t.uid, '更新狀態: ' + status + (uploadedCount ? '，上傳 ' + uploadedCount + ' 個檔案' : ''), s.email);
+  writeLog('進度匯報', t.uid, '更新狀態: ' + status + (uploadedCount ? '，上傳 ' + uploadedCount + ' 個檔案：' + uploadedNames.join('、') : ''), s.email);
 
   if (status === STATUS.COMPLETED && t.taskType === TASK_TYPE.DEFECT) handleDefectClosed_(t.sourceRef);
   return { success: true, url: finalUrl, status: status };
@@ -1247,8 +1253,11 @@ function submitChecklist_(data, s) {
     results.forEach(function (item) {
       let photoUrl = '';
       const itemFiles = item.files && item.files.length ? item.files : (item.file ? [item.file] : null);
-      if (itemFiles) photoUrl = saveFileToDrive(itemFiles, yearMonth + '_' + stationCode + '_' + item.itemId);
-      photoByItem[item.itemId] = photoUrl;
+      if (itemFiles) {
+        const uploaded = uploadFiles_(itemFiles, yearMonth + '_' + stationCode + '_' + item.itemId);
+        photoUrl = uploaded.map(function (f) { return f.url; }).join('\n');
+        photoByItem[item.itemId] = uploaded.map(function (f) { return formatAttachmentLine_('改善前照片－' + f.name, f.url, s.email); }).join('\n');
+      }
       rowsToAdd.push([
         submissionId, stationCode, yearMonth, timestamp, s.email,
         item.itemId || '', item.category || '', item.content || '', item.status || '', item.note || '', photoUrl, ''
@@ -1672,9 +1681,14 @@ function saveAssetCheckBatch_(batchData, files, s) {
 
 /** 上傳一個或多個檔案（base64），回傳以換行分隔的檔案網址 */
 function saveFileToDrive(fileOrFiles, prefix) {
-  if (!fileOrFiles) return '';
+  return uploadFiles_(fileOrFiles, prefix).map(function (f) { return f.url; }).join('\n');
+}
+
+/** 上傳檔案並保留原始檔名：回傳 [{ name, url }] */
+function uploadFiles_(fileOrFiles, prefix) {
+  if (!fileOrFiles) return [];
   const fileList = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
-  if (!fileList.length) return '';
+  if (!fileList.length) return [];
   let folder = null;
   // 指令碼屬性 UPLOAD_FOLDER_ID 可覆寫上傳資料夾（測試環境用）
   const folderId = props_().getProperty('UPLOAD_FOLDER_ID') || UPLOAD_FOLDER_ID;
@@ -1683,7 +1697,7 @@ function saveFileToDrive(fileOrFiles, prefix) {
     const iter = DriveApp.getFoldersByName(DEFAULT_FOLDER_NAME);
     folder = iter.hasNext() ? iter.next() : DriveApp.createFolder(DEFAULT_FOLDER_NAME);
   }
-  const urls = [];
+  const results = [];
   fileList.forEach(function (fileObj, i) {
     if (!fileObj || !fileObj.content) return;
     try {
@@ -1694,12 +1708,118 @@ function saveFileToDrive(fileOrFiles, prefix) {
       const file = folder.createFile(blob);
       try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (shareErr) { /* Workspace 網域限制外部共用時略過 */ }
       const url = file.getUrl();
-      if (url) urls.push(url);
+      if (url) results.push({ name: fileName, url: url });
     } catch (e) {
       Logger.log('上傳檔案失敗: ' + e.toString());
     }
   });
-  return urls.join('\n');
+  return results;
+}
+
+// ==========================================
+// 9.1 工項附件（保留原始檔名、上傳者，可刪除）
+// 儲存格式（附件欄每行一個）：原始檔名 | 檔案網址 | 上傳者Email
+// 舊資料只有網址，開啟工項時會自動到雲端硬碟查回檔名
+// ==========================================
+
+function cleanAttachmentName_(name) {
+  return String(name || '').replace(/[\r\n]+/g, ' ').replace(/\s\|\s/g, ' / ').trim();
+}
+
+function formatAttachmentLine_(name, url, uploader) {
+  return cleanAttachmentName_(name) + ' | ' + url + (uploader ? ' | ' + uploader : '');
+}
+
+function parseAttachmentLine_(line) {
+  line = String(line || '').trim();
+  if (!line) return null;
+  if (/^(https?:\/\/|data:)/.test(line)) return { name: '', url: line, uploader: '' };
+  const m = line.match(/^(.*?) \| (https?:\/\/\S+?)(?: \| (\S+))?$/);
+  if (m) return { name: m[1], url: m[2], uploader: m[3] || '' };
+  return { name: '', url: line, uploader: '' };
+}
+
+function parseAttachments_(cell) {
+  return String(cell || '').split(/\n+/).map(parseAttachmentLine_).filter(function (a) { return a && a.url; });
+}
+
+function serializeAttachments_(list) {
+  return list.map(function (a) { return a.name ? formatAttachmentLine_(a.name, a.url, a.uploader) : a.url; }).join('\n');
+}
+
+function driveFileIdFromUrl_(url) {
+  const m = String(url || '').match(/\/d\/([\w-]{20,})/) || String(url || '').match(/[?&]id=([\w-]{20,})/);
+  return m ? m[1] : '';
+}
+
+/** 雲端硬碟檔名去掉系統加上的前綴：Task_成功-202608-242_1795484671294_原始檔名.pdf → 原始檔名.pdf */
+function originalNameFromDriveName_(driveName) {
+  const m = String(driveName || '').match(/^.*?_\d{13}_(.+)$/);
+  return m ? m[1] : String(driveName || '');
+}
+
+/** 舊附件只有網址：查雲端硬碟取得檔名並寫回（回傳是否有變更） */
+function resolveAttachmentNames_(list) {
+  let changed = false;
+  list.forEach(function (a) {
+    if (a.name || !/^https?:/.test(a.url)) return;
+    const id = driveFileIdFromUrl_(a.url);
+    if (!id) return;
+    try {
+      a.name = cleanAttachmentName_(originalNameFromDriveName_(DriveApp.getFileById(id).getName()));
+      changed = true;
+    } catch (e) {
+      Logger.log('無法取得檔名 ' + a.url + ': ' + e);
+    }
+  });
+  return changed;
+}
+
+/** 開啟工項時呼叫：補齊舊附件檔名 */
+function getAttachments_(p, s) {
+  const found = findTask_(p.uid);
+  if (!found) return { success: false, msg: '找不到工項' };
+  if (!canAccessStation_(s, found.task.stationCode)) return { success: false, code: 'FORBIDDEN', msg: '權限不足' };
+  const cellRange = found.sh.getRange(found.rowNum, TC.ATTACH + 1);
+  const list = parseAttachments_(cellRange.getValue());
+  if (resolveAttachmentNames_(list)) cellRange.setValue(serializeAttachments_(list));
+  return { success: true, attachments: list };
+}
+
+/**
+ * 刪除工項附件（檔案移到雲端硬碟垃圾桶，30 天內可還原）
+ *  - 三維 / 管理員：可刪除任何附件
+ *  - 其他人：只能刪除自己上傳的檔案（舊資料無上傳者紀錄者亦可），且工項不可在審核中或已完成
+ */
+function deleteAttachment_(p, s) {
+  const found = findTask_(p.uid);
+  if (!found) return { success: false, msg: '找不到工項' };
+  const t = found.task;
+  if (!canAccessStation_(s, t.stationCode)) return { success: false, code: 'FORBIDDEN', msg: '權限不足' };
+  const reviewer = isReviewer_(s);
+  if (!reviewer && t.status === STATUS.COMPLETED) return { success: false, msg: '工項已結案，無法刪除附件；如需更正請聯繫三維團隊' };
+  if (!reviewer && t.status === STATUS.UNDER_REVIEW) return { success: false, msg: '工項審核中，無法刪除附件。如需更換檔案，請先將狀態改為「執行中」（撤回審查）' };
+
+  const cellRange = found.sh.getRange(found.rowNum, TC.ATTACH + 1);
+  const list = parseAttachments_(cellRange.getValue());
+  const idx = list.map(function (a) { return a.url; }).indexOf(String(p.url || ''));
+  if (idx < 0) return { success: false, msg: '找不到這個附件，可能已被刪除，請重新整理' };
+  const target = list[idx];
+  if (!reviewer && target.uploader && target.uploader.toLowerCase() !== String(s.email).toLowerCase()) {
+    return { success: false, msg: '只能刪除自己上傳的檔案（此檔由 ' + target.uploader + ' 上傳）' };
+  }
+  if (!target.name) resolveAttachmentNames_([target]);
+
+  let trashed = false;
+  const id = driveFileIdFromUrl_(target.url);
+  if (id) {
+    try { DriveApp.getFileById(id).setTrashed(true); trashed = true; } catch (e) { Logger.log('移至垃圾桶失敗: ' + e); }
+  }
+  list.splice(idx, 1);
+  cellRange.setValue(serializeAttachments_(list));
+  found.sh.getRange(found.rowNum, TC.UPDATED + 1).setValue(new Date());
+  writeLog('刪除附件', t.uid, (target.name || target.url) + (trashed ? '（已移至雲端硬碟垃圾桶）' : '（僅移除連結）') + '｜' + target.url, s.email);
+  return { success: true, attachments: list, attachmentUrl: serializeAttachments_(list) };
 }
 
 // ==========================================

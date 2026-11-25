@@ -3,7 +3,7 @@ import { Task, User, StationCode, TaskStatus, UserRole } from '../types';
 import { STATIONS, STATUS_COLORS } from '../constants';
 import { Search, History, Edit, Paperclip, ClipboardCheck, Eye, Calendar, User as UserIcon, Download, Settings } from 'lucide-react';
 import { exportToExcel } from '../utils';
-import { getDisplayStatus, isDefect } from '../taskStatus';
+import { getDisplayStatus, isDefect, taskAttachments, attachmentLabel } from '../taskStatus';
 
 interface TaskListProps {
   tasks: Task[];
@@ -94,7 +94,7 @@ const TaskList: React.FC<TaskListProps> = ({ tasks = [], currentUser, onEditTask
       '任務類型': task.taskType || '一般',
       '審查意見': task.reviewComment || '',
       '執行人': task.executorEmail || '-',
-      '佐證資料連結': task.attachmentUrl || '-'
+      '佐證資料': taskAttachments(task).map((a, i) => `${attachmentLabel(a, i)}：${a.url}`).join('\n') || '-'
     }));
 
     const dateStr = filterMonth ? filterMonth.replace('-', '年') + '月' : new Date().getFullYear() + '年';
@@ -211,20 +211,20 @@ const TaskList: React.FC<TaskListProps> = ({ tasks = [], currentUser, onEditTask
                   {task.itemName || <span className="text-gray-300 italic font-normal">(未填寫工項名稱)</span>}
                 </h3>
                 
-                {task.attachmentUrl && (
+                {taskAttachments(task).length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mb-3">
-                    {task.attachmentUrl.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).map((url, uIdx, arr) => (
+                    {taskAttachments(task).map((att, uIdx) => (
                       <a
                         key={uIdx}
-                        href={url}
+                        href={att.url}
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
                         className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 border border-blue-200 transition-colors shadow-2xs"
-                        title={url}
+                        title={attachmentLabel(att, uIdx)}
                       >
                         <Paperclip className="w-3 h-3 mr-1 text-blue-500 shrink-0" />
-                        <span>{arr.length > 1 ? `佐證 ${uIdx + 1}` : '檢視佐證'}</span>
+                        <span className="max-w-[12rem] truncate">{attachmentLabel(att, uIdx)}</span>
                       </a>
                     ))}
                   </div>
@@ -313,20 +313,20 @@ const TaskList: React.FC<TaskListProps> = ({ tasks = [], currentUser, onEditTask
                              {isDefect(task) && <span className="mr-1.5 align-middle text-[11px] font-bold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200">缺失改善</span>}
                              {task.itemName || <span className="text-gray-300 italic font-normal text-sm">(未填寫工項名稱)</span>}
                            </div>
-                           {task.attachmentUrl && (
+                           {taskAttachments(task).length > 0 && (
                              <div className="flex flex-wrap gap-1.5 mt-1.5">
-                               {task.attachmentUrl.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).map((url, uIdx, arr) => (
+                               {taskAttachments(task).map((att, uIdx) => (
                                  <a 
                                    key={uIdx}
-                                   href={url}
+                                   href={att.url}
                                    target="_blank"
                                    rel="noopener noreferrer"
                                    onClick={(e) => e.stopPropagation()}
                                    className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 border border-blue-200 transition-colors shadow-2xs"
-                                   title={url}
+                                   title={attachmentLabel(att, uIdx)}
                                  >
                                    <Paperclip className="w-3 h-3 mr-1 text-blue-500 shrink-0" />
-                                   <span>{arr.length > 1 ? `佐證 ${uIdx + 1}` : '檢視佐證'}</span>
+                                   <span className="max-w-[14rem] truncate">{attachmentLabel(att, uIdx)}</span>
                                  </a>
                                ))}
                              </div>

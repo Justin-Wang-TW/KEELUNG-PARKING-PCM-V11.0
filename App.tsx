@@ -367,6 +367,33 @@ const App: React.FC = () => {
     return false;
   };
 
+  /** 把後端回傳的附件清單同步到畫面上的工項（列表、詳情、進度視窗） */
+  const applyAttachments = (taskId: string, attachments: any[], attachmentUrl?: string) => {
+    const patch = (t: Task): Task => t.uid === taskId
+      ? { ...t, attachments, attachmentUrl: attachmentUrl ?? attachments.map(a => a.name ? `${a.name} | ${a.url}${a.uploader ? ' | ' + a.uploader : ''}` : a.url).join('\n') }
+      : t;
+    setTasks(prev => prev.map(patch));
+    setEditingTask(prev => prev ? patch(prev) : prev);
+    setViewingTask(prev => prev ? patch(prev) : prev);
+  };
+
+  /** 舊附件只有網址：開啟工項時向後端補回原始檔名 */
+  const handleLoadAttachments = async (taskId: string) => {
+    const { ok, data } = await api('getAttachments', { uid: taskId });
+    if (ok && Array.isArray(data?.attachments)) applyAttachments(taskId, data.attachments);
+  };
+
+  const handleDeleteAttachment = async (taskId: string, url: string, name: string): Promise<boolean> => {
+    if (!window.confirm(`確定要刪除「${name}」嗎？\n\n檔案會移到雲端硬碟的垃圾桶（30 天內可由管理員還原），並留下操作紀錄。`)) return false;
+    const { ok, data, error } = await api('deleteAttachment', { uid: taskId, url });
+    if (ok && Array.isArray(data?.attachments)) {
+      applyAttachments(taskId, data.attachments, data.attachmentUrl);
+      return true;
+    }
+    alert('刪除失敗: ' + error);
+    return false;
+  };
+
   const handleUpdateTaskMetadata = async (taskId: string, updates: Partial<Task>) => {
     const { ok, error } = await api('updateTaskMetadata', { uid: taskId, updates });
     if (ok) { alert('工項修改成功！'); fetchTasks(); }
@@ -570,6 +597,8 @@ const App: React.FC = () => {
           currentUser={currentUser}
           onClose={() => setEditingTask(null)}
           onSave={handleSaveTaskProgress}
+          onDeleteAttachment={handleDeleteAttachment}
+          onLoadAttachments={handleLoadAttachments}
         />
       )}
 
@@ -591,6 +620,8 @@ const App: React.FC = () => {
           currentUser={currentUser}
           onSave={handleSaveTaskProgress}
           onReview={handleReviewTask}
+          onDeleteAttachment={handleDeleteAttachment}
+          onLoadAttachments={handleLoadAttachments}
         />
       )}
 
