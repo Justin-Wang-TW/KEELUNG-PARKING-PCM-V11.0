@@ -33,12 +33,7 @@ jobs:
         run: npm install
 
       - name: Build project
-        env:
-          # 在 GitHub「Settings → Secrets and variables → Actions → Variables」設定
-          # VITE_SCRIPT_URL：測試用 Apps Script 網址（未設定則連到正式後端）
-          # VITE_ENV_LABEL ：例如「V11 測試環境」
-          VITE_SCRIPT_URL: ${{ vars.VITE_SCRIPT_URL }}
-          VITE_ENV_LABEL: ${{ vars.VITE_ENV_LABEL }}
+        # 後端網址與環境標籤由 .env.production 設定
         run: npm run build
 
       - name: Upload artifact
