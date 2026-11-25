@@ -20,6 +20,8 @@
 // ==========================================
 
 const APP_VERSION = 'V11.0';
+// 後端程式版本（每次修改後端時更新，用來確認 Apps Script 是否已部署最新版）
+const API_BUILD = '20261125-批次刪除附件';
 const TZ = 'Asia/Taipei';
 const DEFAULT_FOLDER_NAME = '停車場系統_附件備份';
 // 所有上傳檔案的 Google Drive 資料夾（前端傳來的 folderId 一律忽略，避免寫入任意資料夾）
@@ -581,7 +583,7 @@ function deleteUser_(p, s) {
  *  write : 會寫入資料（加上鎖定）
  */
 const ROUTES = {
-  ping: { public: true, fn: function () { return { success: true, msg: 'API ' + APP_VERSION + ' 運作中' }; } },
+  ping: { public: true, fn: function () { return { success: true, msg: 'API ' + APP_VERSION + ' 運作中', build: API_BUILD }; } },
   login: { public: true, write: true, fn: function (p) { return login_(p); } },
   registerUser: { public: true, write: true, fn: function (p) { return registerUser(p.user); } },
   logError: { public: true, write: true, fn: function (p) { return logErrorToSheet(p.data || {}); } },
@@ -645,7 +647,7 @@ const ROUTES = {
 const SANITIZE_KEYS = ['data', 'taskData', 'updates', 'items', 'user', 'content', 'comment'];
 
 function doGet(e) {
-  return json_({ success: true, msg: '基隆市停車場履約管理系統 API ' + APP_VERSION + '（所有功能請使用 POST）' });
+  return json_({ success: true, msg: '基隆市停車場履約管理系統 API ' + APP_VERSION + '（所有功能請使用 POST）', build: API_BUILD });
 }
 
 function doPost(e) {
