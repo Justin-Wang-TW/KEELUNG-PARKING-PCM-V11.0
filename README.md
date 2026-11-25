@@ -20,6 +20,13 @@ gas/appsscript.json   Apps Script 資訊清單（權限範圍）
 docs/V11升級部署說明.md  升級步驟、測試清單、回復方式
 ```
 
+## 部署與網址
+
+| 環境 | 網址 | 來源 | 後端 |
+|---|---|---|---|
+| 正式站 | https://keelung-parking.vercel.app | 本儲存庫 `main`（Vercel 專案 keelung-parking，`npm run build`） | 正式試算表 |
+| 測試站 | https://justin-wang-tw.github.io/KEELUNG-PARKING-PCM-V11.0/ | 本儲存庫 `main`（GitHub Actions，`--mode testenv`） | 測試試算表 |
+
 ## 本機開發
 
 需求：Node.js 20 以上
