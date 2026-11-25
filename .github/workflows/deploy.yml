@@ -15,10 +15,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-and-deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  # 1. 建置網站並上傳成品
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,8 +30,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # 後端網址與環境標籤由 .env.production 設定
       - name: Build project
-        # 後端網址與環境標籤由 .env.production 設定
         run: npm run build
 
       - name: Setup Pages
@@ -44,6 +42,14 @@ jobs:
         with:
           path: ./dist
 
+  # 2. 另一個工作發佈到 GitHub Pages（GitHub 官方範本做法，避免剛上傳的成品還查不到）
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@v4
