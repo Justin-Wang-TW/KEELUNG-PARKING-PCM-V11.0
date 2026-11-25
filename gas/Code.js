@@ -1676,7 +1676,9 @@ function saveFileToDrive(fileOrFiles, prefix) {
   const fileList = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
   if (!fileList.length) return '';
   let folder = null;
-  try { folder = DriveApp.getFolderById(UPLOAD_FOLDER_ID); } catch (e) { folder = null; }
+  // 指令碼屬性 UPLOAD_FOLDER_ID 可覆寫上傳資料夾（測試環境用）
+  const folderId = props_().getProperty('UPLOAD_FOLDER_ID') || UPLOAD_FOLDER_ID;
+  try { folder = DriveApp.getFolderById(folderId); } catch (e) { folder = null; }
   if (!folder) {
     const iter = DriveApp.getFoldersByName(DEFAULT_FOLDER_NAME);
     folder = iter.hasNext() ? iter.next() : DriveApp.createFolder(DEFAULT_FOLDER_NAME);
